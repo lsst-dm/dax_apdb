@@ -57,6 +57,11 @@ def _create_sql_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser("create-sql", help="Create new APDB instance in SQL database.")
     parser.add_argument("db_url", help="Database URL in SQLAlchemy format for APDB instance.")
     parser.add_argument("output_config", help="Name of the new configuration file for created APDB instance.")
+    parser.add_argument(
+        "instrument",
+        help="Instrument name of the data that will be stored in this APDB instance."
+        " This is the fully-qualified name, for example 'lsst.obs.lsst.LsstCam'.",
+    )
     options.common_apdb_options(parser)
     options.sql_config_options(parser)
     parser.add_argument(
@@ -72,6 +77,11 @@ def _create_cassandra_subcommand(subparsers: argparse._SubParsersAction) -> None
         "keyspace", help="Cassandra keyspace name for APDB tables, will be created if does not exist."
     )
     parser.add_argument("output_config", help="Name of the new configuration file for created APDB instance.")
+    parser.add_argument(
+        "instrument",
+        help="Instrument name of the data that will be stored in this APDB instance."
+        " This is the fully-qualified name, for example 'lsst.obs.lsst.LsstCam'.",
+    )
     options.common_apdb_options(parser)
     options.cassandra_config_options(parser)
     parser.add_argument(

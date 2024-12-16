@@ -97,3 +97,27 @@ def metadata_show(config: str, use_json: bool) -> None:
     else:
         for key, value in apdb.metadata.items():
             print(f"{key}: {value}")
+
+
+def check_instrument(instrument: str) -> None:
+    """Check that a fully-qualified instrument name is valid, if pipe_base is
+    available.
+
+    Parameters
+    ----------
+    instrument : str
+        Name of instrument to check for validity.
+
+    Raises
+    ------
+    RuntimeError
+        Raised if the instrument is not known to `~lsst.pipe.base.Instrument`.
+    """
+    try:
+        import lsst.pipe.base
+
+        lsst.pipe.base.Instrument.from_string(instrument)
+    except ModuleNotFoundError as e:
+        print(f"WARNING: Cannot check instrument string `{instrument}` against the canonical list: {e}")
+    except RuntimeError as e:
+        raise RuntimeError(f"Not creating APDB: invalid or unknown instrument name `{instrument}`") from e

@@ -26,6 +26,7 @@ __all__ = ["create_sql"]
 from typing import Any
 
 from ..sql import ApdbSql
+from . import metadata
 
 
 def create_sql(output_config: str, ra_dec_columns: str | None, **kwargs: Any) -> None:
@@ -40,8 +41,14 @@ def create_sql(output_config: str, ra_dec_columns: str | None, **kwargs: Any) ->
     **kwargs
         Keyword arguments passed to `ApdbSql.init_database` method.
     """
+    instrument = kwargs.pop("instrument")
+    metadata.check_instrument(instrument)
+
     ra_dec_list: list[str] | None = None
     if ra_dec_columns:
         ra_dec_list = ra_dec_columns.split(",")
     config = ApdbSql.init_database(ra_dec_columns=ra_dec_list, **kwargs)
     config.save(output_config)
+
+    apdb = ApdbSql.from_config(config)
+    apdb.metadata.set("instrument", instrument)
