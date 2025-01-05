@@ -43,6 +43,7 @@ def main(args: Sequence[str] | None = None) -> None:
     _delete_cassandra_subcommand(subparsers)
     _list_index_subcommand(subparsers)
     _metadata_subcommand(subparsers)
+    _convert_legacy_config_subcommand(subparsers)
 
     parsed_args = parser.parse_args(args)
     log_cli.process_args(parsed_args)
@@ -165,3 +166,10 @@ def _metadata_delete_subcommand(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument("config", help="Path or URI of APDB configuration file.")
     parser.add_argument("key", help="Metadata key, arbitrary string.")
     parser.set_defaults(method=scripts.metadata_delete)
+
+
+def _convert_legacy_config_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser("convert-legacy-config", help="Convert legacy pex_config to YAML.")
+    parser.add_argument("legacy_config", help="Path or URI of APDB legacy configuration file.")
+    parser.add_argument("new_config", help="Path or URI to write new YAML configuration file.")
+    parser.set_defaults(method=scripts.convert_legacy_config)

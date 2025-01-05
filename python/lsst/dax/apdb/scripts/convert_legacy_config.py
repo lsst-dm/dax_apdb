@@ -19,10 +19,28 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from .convert_legacy_config import convert_legacy_config
-from .create_cassandra import create_cassandra
-from .create_sql import create_sql
-from .delete_cassandra import delete_cassandra
-from .list_cassandra import list_cassandra
-from .list_index import list_index
-from .metadata import metadata_delete, metadata_get, metadata_set, metadata_show
+from __future__ import annotations
+
+__all__ = ["convert_legacy_config"]
+
+from lsst.resources import ResourcePath
+
+from ..legacy_config import ApdbConfig
+
+
+def convert_legacy_config(legacy_config: str, new_config: str) -> None:
+    """List contents of APDB index file.
+
+    Parameters
+    ----------
+    lecagy_config : `str`
+        Path or URL for the existing APDB configuration in pex_config format.
+    new_config : `str`
+        Path or URL for the output configuration in YAML format.
+    """
+    path = ResourcePath(legacy_config)
+    config_bytes = path.read()
+
+    pex_config = ApdbConfig.legacy_load(config_bytes)
+    pydantic_config = pex_config.to_model()
+    pydantic_config.save(new_config)
