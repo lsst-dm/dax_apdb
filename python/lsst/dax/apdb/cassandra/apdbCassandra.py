@@ -21,7 +21,7 @@
 
 from __future__ import annotations
 
-__all__ = ["ApdbCassandraConfig", "ApdbCassandra"]
+__all__ = ["ApdbCassandra"]
 
 import dataclasses
 import logging
@@ -49,7 +49,6 @@ except ImportError:
 import astropy.time
 import felis.datamodel
 from lsst import sphgeom
-from lsst.pex.config import ChoiceField, Field, ListField
 from lsst.utils.db_auth import DbAuth, DbAuthNotFoundError
 from lsst.utils.iteration import chunk_iterable
 
@@ -74,6 +73,7 @@ from .cassandra_utils import (
     raw_data_factory,
     select_concurrent,
 )
+from .config import ApdbCassandraConfig, ApdbCassandraConnectionConfig
 
 if TYPE_CHECKING:
     from ..apdbMetadata import ApdbMetadata
@@ -97,101 +97,6 @@ def _dump_query(rf: Any) -> None:
 class CassandraMissingError(Exception):
     def __init__(self) -> None:
         super().__init__("cassandra-driver module cannot be imported")
-
-
-class ApdbCassandraConfig(ApdbConfig):
-    """Configuration class for Cassandra-based APDB implementation."""
-
-    contact_points = ListField[str](
-        doc="The list of contact points to try connecting for cluster discovery.", default=["127.0.0.1"]
-    )
-    private_ips = ListField[str](doc="List of internal IP addresses for contact_points.", default=[])
-    port = Field[int](doc="Port number to connect to.", default=9042)
-    keyspace = Field[str](doc="Default keyspace for operations.", default="apdb")
-    username = Field[str](
-        doc=f"Cassandra user name, if empty then {DB_AUTH_PATH} has to provide it with password.",
-        default="",
-    )
-    read_consistency = Field[str](
-        doc="Name for consistency level of read operations, default: QUORUM, can be ONE.", default="QUORUM"
-    )
-    write_consistency = Field[str](
-        doc="Name for consistency level of write operations, default: QUORUM, can be ONE.", default="QUORUM"
-    )
-    read_timeout = Field[float](doc="Timeout in seconds for read operations.", default=120.0)
-    write_timeout = Field[float](doc="Timeout in seconds for write operations.", default=60.0)
-    remove_timeout = Field[float](doc="Timeout in seconds for remove operations.", default=600.0)
-    read_concurrency = Field[int](doc="Concurrency level for read operations.", default=500)
-    protocol_version = Field[int](
-        doc="Cassandra protocol version to use, default is V4",
-        default=cassandra.ProtocolVersion.V4 if CASSANDRA_IMPORTED else 0,
-    )
-    dia_object_columns = ListField[str](
-        doc="List of columns to read from DiaObject[Last], by default read all columns", default=[]
-    )
-    prefix = Field[str](doc="Prefix to add to table names", default="")
-    part_pixelization = ChoiceField[str](
-        allowed=dict(htm="HTM pixelization", q3c="Q3C pixelization", mq3c="MQ3C pixelization"),
-        doc="Pixelization used for partitioning index.",
-        default="mq3c",
-    )
-    part_pix_level = Field[int](doc="Pixelization level used for partitioning index.", default=11)
-    part_pix_max_ranges = Field[int](doc="Max number of ranges in pixelization envelope", default=128)
-    ra_dec_columns = ListField[str](default=["ra", "dec"], doc="Names of ra/dec columns in DiaObject table")
-    timer = Field[bool](doc="If True then print/log timing information", default=False)
-    time_partition_tables = Field[bool](
-        doc="Use per-partition tables for sources instead of partitioning by time", default=False
-    )
-    time_partition_days = Field[int](
-        doc=(
-            "Time partitioning granularity in days, this value must not be changed after database is "
-            "initialized"
-        ),
-        default=30,
-    )
-    time_partition_start = Field[str](
-        doc=(
-            "Starting time for per-partition tables, in yyyy-mm-ddThh:mm:ss format, in TAI. "
-            "This is used only when time_partition_tables is True."
-        ),
-        default="2018-12-01T00:00:00",
-    )
-    time_partition_end = Field[str](
-        doc=(
-            "Ending time for per-partition tables, in yyyy-mm-ddThh:mm:ss format, in TAI. "
-            "This is used only when time_partition_tables is True."
-        ),
-        default="2030-01-01T00:00:00",
-    )
-    query_per_time_part = Field[bool](
-        default=False,
-        doc=(
-            "If True then build separate query for each time partition, otherwise build one single query. "
-            "This is only used when time_partition_tables is False in schema config."
-        ),
-    )
-    query_per_spatial_part = Field[bool](
-        default=False,
-        doc="If True then build one query per spatial partition, otherwise build single query.",
-    )
-    use_insert_id_skips_diaobjects = Field[bool](
-        default=False,
-        doc=(
-            "If True then do not store DiaObjects when use_insert_id is True "
-            "(DiaObjectsChunks has the same data)."
-        ),
-    )
-    idle_heartbeat_interval = Field[int](
-        doc=(
-            "Interval, in seconds, on which to heartbeat idle connections. "
-            "Zero (default) disables heartbeats."
-        ),
-        default=0,
-    )
-    idle_heartbeat_timeout = Field[int](
-        doc="Timeout, in seconds, on which the heartbeat wait for idle connection responses.",
-        default=30,
-    )
 
 
 @dataclasses.dataclass
@@ -267,13 +172,13 @@ class ApdbCassandra(Apdb):
     """Name of the metadata key to store code version number."""
 
     _frozen_parameters = (
-        "use_insert_id",
-        "part_pixelization",
-        "part_pix_level",
+        "enable_replica",
         "ra_dec_columns",
-        "time_partition_tables",
-        "time_partition_days",
-        "use_insert_id_skips_diaobjects",
+        "replica_skips_diaobjects",
+        "partitioning.part_pixelization",
+        "partitioning.part_pix_level",
+        "partitioning.time_partition_tables",
+        "partitioning.time_partition_days",
     )
     """Names of the config parameters to be frozen in metadata table."""
 
@@ -283,10 +188,6 @@ class ApdbCassandra(Apdb):
     def __init__(self, config: ApdbCassandraConfig):
         if not CASSANDRA_IMPORTED:
             raise CassandraMissingError()
-
-        self._timer_args: list[MonAgent | logging.Logger] = [_MON]
-        if config.timer:
-            self._timer_args.append(_LOG)
 
         self._keyspace = config.keyspace
 
@@ -306,12 +207,11 @@ class ApdbCassandra(Apdb):
                 self.config = freezer.update(config, config_json)
             else:
                 self.config = config
-            self.config.validate()
 
         self._pixelization = Pixelization(
-            self.config.part_pixelization,
-            self.config.part_pix_level,
-            config.part_pix_max_ranges,
+            self.config.partitioning.part_pixelization,
+            self.config.partitioning.part_pix_level,
+            config.partitioning.part_pix_max_ranges,
         )
 
         self._schema = ApdbCassandraSchema(
@@ -320,8 +220,8 @@ class ApdbCassandra(Apdb):
             schema_file=self.config.schema_file,
             schema_name=self.config.schema_name,
             prefix=self.config.prefix,
-            time_partition_tables=self.config.time_partition_tables,
-            enable_replica=self.config.use_insert_id,
+            time_partition_tables=self.config.partitioning.time_partition_tables,
+            enable_replica=self.config.enable_replica,
         )
         self._partition_zero_epoch_mjd = float(self.partition_zero_epoch.mjd)
 
@@ -341,7 +241,7 @@ class ApdbCassandra(Apdb):
         self._preparer = PreparedStatementCache(self._session)
 
         _LOG.debug("ApdbCassandra Configuration:")
-        for key, value in self.config.items():
+        for key, value in self.config.model_dump().items():
             _LOG.debug("    %s: %s", key, value)
 
     def __del__(self) -> None:
@@ -350,32 +250,26 @@ class ApdbCassandra(Apdb):
 
     def _timer(self, name: str, *, tags: Mapping[str, str | int] | None = None) -> Timer:
         """Create `Timer` instance given its name."""
-        return Timer(name, *self._timer_args, tags=tags)
+        return Timer(name, _MON, tags=tags)
 
     @classmethod
     def _make_session(cls, config: ApdbCassandraConfig) -> tuple[Cluster, Session]:
         """Make Cassandra session."""
         addressTranslator: AddressTranslator | None = None
-        if config.private_ips:
-            addressTranslator = _AddressTranslator(list(config.contact_points), list(config.private_ips))
+        if config.connection_config.private_ips:
+            addressTranslator = _AddressTranslator(
+                config.contact_points, config.connection_config.private_ips
+            )
 
-        timer_args: list[MonAgent | logging.Logger] = [_MON]
-        if config.timer:
-            timer_args.append(_LOG)
-        with Timer("cluster_connect", *timer_args):
-            # TODO: control_connection_timeout is hardcoded for now as I do not
-            # want to extend config class with too many options. I'll move it
-            # to config when we switch from pex_config to other format.
+        with Timer("cluster_connect", _MON):
             cluster = Cluster(
                 execution_profiles=cls._makeProfiles(config),
                 contact_points=config.contact_points,
-                port=config.port,
+                port=config.connection_config.port,
                 address_translator=addressTranslator,
-                protocol_version=config.protocol_version,
+                protocol_version=config.connection_config.protocol_version,
                 auth_provider=cls._make_auth_provider(config),
-                control_connection_timeout=100,
-                idle_heartbeat_interval=config.idle_heartbeat_interval,
-                idle_heartbeat_timeout=config.idle_heartbeat_timeout,
+                **config.connection_config.extra_parameters,
             )
             session = cluster.connect()
 
@@ -402,7 +296,11 @@ class ApdbCassandra(Apdb):
         for hostname in config.contact_points:
             try:
                 username, password = dbauth.getAuth(
-                    "cassandra", config.username, hostname, config.port, config.keyspace
+                    "cassandra",
+                    config.connection_config.username,
+                    hostname,
+                    config.connection_config.port,
+                    config.keyspace,
                 )
                 if not username:
                     # Password without user name, try next hostname, but give
@@ -493,8 +391,8 @@ class ApdbCassandra(Apdb):
         schema_name: str | None = None,
         read_sources_months: int | None = None,
         read_forced_sources_months: int | None = None,
-        use_insert_id: bool = False,
-        use_insert_id_skips_diaobjects: bool = False,
+        enable_replica: bool = False,
+        replica_skips_diaobjects: bool = False,
         port: int | None = None,
         username: str | None = None,
         prefix: str | None = None,
@@ -530,11 +428,11 @@ class ApdbCassandra(Apdb):
             Number of months of history to read from DiaSource.
         read_forced_sources_months : `int`, optional
             Number of months of history to read from DiaForcedSource.
-        use_insert_id : `bool`, optional
+        enable_replica : `bool`, optional
             If True, make additional tables used for replication to PPDB.
-        use_insert_id_skips_diaobjects : `bool`, optional
+        replica_skips_diaobjects : `bool`, optional
             If `True` then do not fill regular ``DiaObject`` table when
-            ``use_insert_id`` is `True`.
+            ``enable_replica`` is `True`.
         port : `int`, optional
             Port number to use for Cassandra connections.
         username : `str`, optional
@@ -576,13 +474,26 @@ class ApdbCassandra(Apdb):
         config : `ApdbCassandraConfig`
             Resulting configuration object for a created APDB instance.
         """
+        # Some non-standard defaults for connection parameters, these can be
+        # changed later in generated config. Check Cassandra driver
+        # documentation for what these parameters do. These parameters are not
+        # used during database initialization, but they will be saved with
+        # generated config.
+        connection_config = ApdbCassandraConnectionConfig(
+            extra_parameters={
+                "idle_heartbeat_interval": 0,
+                "idle_heartbeat_timeout": 30,
+                "control_connection_timeout": 100,
+            },
+        )
         config = ApdbCassandraConfig(
             contact_points=hosts,
             keyspace=keyspace,
-            use_insert_id=use_insert_id,
-            use_insert_id_skips_diaobjects=use_insert_id_skips_diaobjects,
-            time_partition_tables=time_partition_tables,
+            enable_replica=enable_replica,
+            replica_skips_diaobjects=replica_skips_diaobjects,
+            connection_config=connection_config,
         )
+        config.partitioning.time_partition_tables = time_partition_tables
         if schema_file is not None:
             config.schema_file = schema_file
         if schema_name is not None:
@@ -592,27 +503,27 @@ class ApdbCassandra(Apdb):
         if read_forced_sources_months is not None:
             config.read_forced_sources_months = read_forced_sources_months
         if port is not None:
-            config.port = port
+            config.connection_config.port = port
         if username is not None:
-            config.username = username
+            config.connection_config.username = username
         if prefix is not None:
             config.prefix = prefix
         if part_pixelization is not None:
-            config.part_pixelization = part_pixelization
+            config.partitioning.part_pixelization = part_pixelization
         if part_pix_level is not None:
-            config.part_pix_level = part_pix_level
+            config.partitioning.part_pix_level = part_pix_level
         if time_partition_start is not None:
-            config.time_partition_start = time_partition_start
+            config.partitioning.time_partition_start = time_partition_start
         if time_partition_end is not None:
-            config.time_partition_end = time_partition_end
+            config.partitioning.time_partition_end = time_partition_end
         if read_consistency is not None:
-            config.read_consistency = read_consistency
+            config.connection_config.read_consistency = read_consistency
         if write_consistency is not None:
-            config.write_consistency = write_consistency
+            config.connection_config.write_consistency = write_consistency
         if read_timeout is not None:
-            config.read_timeout = read_timeout
+            config.connection_config.read_timeout = read_timeout
         if write_timeout is not None:
-            config.write_timeout = write_timeout
+            config.connection_config.write_timeout = write_timeout
         if ra_dec_columns is not None:
             config.ra_dec_columns = ra_dec_columns
 
@@ -729,18 +640,20 @@ class ApdbCassandra(Apdb):
                 schema_file=config.schema_file,
                 schema_name=config.schema_name,
                 prefix=config.prefix,
-                time_partition_tables=config.time_partition_tables,
-                enable_replica=config.use_insert_id,
+                time_partition_tables=config.partitioning.time_partition_tables,
+                enable_replica=config.enable_replica,
             )
 
             # Ask schema to create all tables.
-            if config.time_partition_tables:
+            if config.partitioning.time_partition_tables:
                 time_partition_start = astropy.time.Time(
-                    config.time_partition_start, format="isot", scale="tai"
+                    config.partitioning.time_partition_start, format="isot", scale="tai"
                 )
-                time_partition_end = astropy.time.Time(config.time_partition_end, format="isot", scale="tai")
+                time_partition_end = astropy.time.Time(
+                    config.partitioning.time_partition_end, format="isot", scale="tai"
+                )
                 part_epoch = float(cls.partition_zero_epoch.mjd)
-                part_days = config.time_partition_days
+                part_days = config.partitioning.time_partition_days
                 part_range = (
                     cls._time_partition_cls(time_partition_start, part_epoch, part_days),
                     cls._time_partition_cls(time_partition_end, part_epoch, part_days) + 1,
@@ -766,7 +679,7 @@ class ApdbCassandra(Apdb):
                 metadata.set(cls.metadataSchemaVersionKey, str(schema.schemaVersion()), force=True)
                 metadata.set(cls.metadataCodeVersionKey, str(cls.apdbImplementationVersion()), force=True)
 
-                if config.use_insert_id:
+                if config.enable_replica:
                     # Only store replica code version if replica is enabled.
                     metadata.set(
                         cls.metadataReplicaVersionKey,
@@ -811,7 +724,10 @@ class ApdbCassandra(Apdb):
                 objects = cast(
                     pandas.DataFrame,
                     select_concurrent(
-                        self._session, statements, "read_pandas_multi", self.config.read_concurrency
+                        self._session,
+                        statements,
+                        "read_pandas_multi",
+                        self.config.connection_config.read_concurrency,
                     ),
                 )
                 timer.add_values(row_count=len(objects))
@@ -852,10 +768,10 @@ class ApdbCassandra(Apdb):
         # production.
         existing_tables = self._schema.existing_tables(ApdbTables.DiaSource, ApdbTables.DiaForcedSource)
         tables_to_check = existing_tables[ApdbTables.DiaSource][:]
-        if self.config.use_insert_id:
+        if self.config.enable_replica:
             tables_to_check.append(self._schema.tableName(ExtraTables.DiaSourceChunks))
         tables_to_check.extend(existing_tables[ApdbTables.DiaForcedSource])
-        if self.config.use_insert_id:
+        if self.config.enable_replica:
             tables_to_check.append(self._schema.tableName(ExtraTables.DiaForcedSourceChunks))
 
         # I do not want to run concurrent queries as they are all full-scan
@@ -955,7 +871,9 @@ class ApdbCassandra(Apdb):
         # No need for DataFrame here, read data as tuples.
         result = cast(
             list[tuple[int, int, int, int | None]],
-            select_concurrent(self._session, selects, "read_tuples", self.config.read_concurrency),
+            select_concurrent(
+                self._session, selects, "read_tuples", self.config.connection_config.read_concurrency
+            ),
         )
 
         # Make mapping from source ID to its partition.
@@ -977,7 +895,7 @@ class ApdbCassandra(Apdb):
         for diaSourceId, ssObjectId in idMap.items():
             apdb_part, apdb_time_part = id2partitions[diaSourceId]
             values: tuple
-            if self.config.time_partition_tables:
+            if self.config.partitioning.time_partition_tables:
                 query = (
                     f'UPDATE "{self._keyspace}"."{table_name}_{apdb_time_part}"'
                     ' SET "ssObjectId" = ?, "diaObjectId" = NULL'
@@ -1039,47 +957,47 @@ class ApdbCassandra(Apdb):
     @classmethod
     def _makeProfiles(cls, config: ApdbCassandraConfig) -> Mapping[Any, ExecutionProfile]:
         """Make all execution profiles used in the code."""
-        if config.private_ips:
+        if config.connection_config.private_ips:
             loadBalancePolicy = WhiteListRoundRobinPolicy(hosts=config.contact_points)
         else:
             loadBalancePolicy = RoundRobinPolicy()
 
         read_tuples_profile = ExecutionProfile(
-            consistency_level=getattr(cassandra.ConsistencyLevel, config.read_consistency),
-            request_timeout=config.read_timeout,
+            consistency_level=getattr(cassandra.ConsistencyLevel, config.connection_config.read_consistency),
+            request_timeout=config.connection_config.read_timeout,
             row_factory=cassandra.query.tuple_factory,
             load_balancing_policy=loadBalancePolicy,
         )
         read_pandas_profile = ExecutionProfile(
-            consistency_level=getattr(cassandra.ConsistencyLevel, config.read_consistency),
-            request_timeout=config.read_timeout,
+            consistency_level=getattr(cassandra.ConsistencyLevel, config.connection_config.read_consistency),
+            request_timeout=config.connection_config.read_timeout,
             row_factory=pandas_dataframe_factory,
             load_balancing_policy=loadBalancePolicy,
         )
         read_raw_profile = ExecutionProfile(
-            consistency_level=getattr(cassandra.ConsistencyLevel, config.read_consistency),
-            request_timeout=config.read_timeout,
+            consistency_level=getattr(cassandra.ConsistencyLevel, config.connection_config.read_consistency),
+            request_timeout=config.connection_config.read_timeout,
             row_factory=raw_data_factory,
             load_balancing_policy=loadBalancePolicy,
         )
         # Profile to use with select_concurrent to return pandas data frame
         read_pandas_multi_profile = ExecutionProfile(
-            consistency_level=getattr(cassandra.ConsistencyLevel, config.read_consistency),
-            request_timeout=config.read_timeout,
+            consistency_level=getattr(cassandra.ConsistencyLevel, config.connection_config.read_consistency),
+            request_timeout=config.connection_config.read_timeout,
             row_factory=pandas_dataframe_factory,
             load_balancing_policy=loadBalancePolicy,
         )
         # Profile to use with select_concurrent to return raw data (columns and
         # rows)
         read_raw_multi_profile = ExecutionProfile(
-            consistency_level=getattr(cassandra.ConsistencyLevel, config.read_consistency),
-            request_timeout=config.read_timeout,
+            consistency_level=getattr(cassandra.ConsistencyLevel, config.connection_config.read_consistency),
+            request_timeout=config.connection_config.read_timeout,
             row_factory=raw_data_factory,
             load_balancing_policy=loadBalancePolicy,
         )
         write_profile = ExecutionProfile(
-            consistency_level=getattr(cassandra.ConsistencyLevel, config.write_consistency),
-            request_timeout=config.write_timeout,
+            consistency_level=getattr(cassandra.ConsistencyLevel, config.connection_config.write_consistency),
+            request_timeout=config.connection_config.write_timeout,
             load_balancing_policy=loadBalancePolicy,
         )
         # To replace default DCAwareRoundRobinPolicy
@@ -1153,7 +1071,10 @@ class ApdbCassandra(Apdb):
                 catalog = cast(
                     pandas.DataFrame,
                     select_concurrent(
-                        self._session, statements, "read_pandas_multi", self.config.read_concurrency
+                        self._session,
+                        statements,
+                        "read_pandas_multi",
+                        self.config.connection_config.read_concurrency,
                     ),
                 )
                 timer.add_values(row_count=len(catalog))
@@ -1185,7 +1106,7 @@ class ApdbCassandra(Apdb):
         self._session.execute(
             self._preparer.prepare(query),
             (partition, replica_chunk.id, timestamp, replica_chunk.unique_id),
-            timeout=self.config.write_timeout,
+            timeout=self.config.connection_config.write_timeout,
             execution_profile="write",
         )
 
@@ -1206,7 +1127,9 @@ class ApdbCassandra(Apdb):
         with self._timer("query_object_last_partitions") as timer:
             data = cast(
                 ApdbTableData,
-                select_concurrent(self._session, queries, "read_raw_multi", self.config.read_concurrency),
+                select_concurrent(
+                    self._session, queries, "read_raw_multi", self.config.connection_config.read_concurrency
+                ),
             )
             timer.add_values(object_count=object_count, row_count=len(data.rows()))
 
@@ -1241,7 +1164,9 @@ class ApdbCassandra(Apdb):
             for oid, (old_part, _) in moved_oids.items():
                 batch.add(statement, (old_part, oid))
             with self._timer("delete_object_last") as timer:
-                self._session.execute(batch, timeout=self.config.write_timeout, execution_profile="write")
+                self._session.execute(
+                    batch, timeout=self.config.connection_config.write_timeout, execution_profile="write"
+                )
                 timer.add_values(row_count=len(moved_oids))
 
         # Add all new records to the map.
@@ -1253,7 +1178,9 @@ class ApdbCassandra(Apdb):
             batch.add(statement, (oid, new_part))
 
         with self._timer("update_object_last_partition") as timer:
-            self._session.execute(batch, timeout=self.config.write_timeout, execution_profile="write")
+            self._session.execute(
+                batch, timeout=self.config.connection_config.write_timeout, execution_profile="write"
+            )
             timer.add_values(row_count=len(batch))
 
     def _storeDiaObjects(
@@ -1283,13 +1210,13 @@ class ApdbCassandra(Apdb):
 
         extra_columns["validityStart"] = visit_time_dt
         time_part: int | None = self._time_partition(visit_time)
-        if not self.config.time_partition_tables:
+        if not self.config.partitioning.time_partition_tables:
             extra_columns["apdb_time_part"] = time_part
             time_part = None
 
         # Only store DiaObects if not doing replication or explicitly
         # configured to always store them.
-        if replica_chunk is None or not self.config.use_insert_id_skips_diaobjects:
+        if replica_chunk is None or not self.config.replica_skips_diaobjects:
             self._storeObjectsPandas(
                 objs, ApdbTables.DiaObject, extra_columns=extra_columns, time_part=time_part
             )
@@ -1322,7 +1249,7 @@ class ApdbCassandra(Apdb):
         tp_sources = sources.copy(deep=False)
         tp_sources["apdb_time_part"] = tp_sources["midpointMjdTai"].apply(self._time_partition)
         extra_columns: dict[str, Any] = {}
-        if not self.config.time_partition_tables:
+        if not self.config.partitioning.time_partition_tables:
             self._storeObjectsPandas(tp_sources, table_name)
         else:
             # Group by time partition
@@ -1461,7 +1388,9 @@ class ApdbCassandra(Apdb):
         _LOG.debug("%s: will store %d records", self._schema.tableName(table_name), records.shape[0])
         with self._timer("insert_time", tags={"table": table_name.name}) as timer:
             for batch in queries:
-                self._session.execute(batch, timeout=self.config.write_timeout, execution_profile="write")
+                self._session.execute(
+                    batch, timeout=self.config.connection_config.write_timeout, execution_profile="write"
+                )
             timer.add_values(row_count=len(records))
 
     def _add_apdb_part(self, df: pandas.DataFrame) -> pandas.DataFrame:
@@ -1543,7 +1472,7 @@ class ApdbCassandra(Apdb):
         else:
             mjd = time
         days_since_epoch = mjd - self._partition_zero_epoch_mjd
-        partition = int(days_since_epoch) // self.config.time_partition_days
+        partition = int(days_since_epoch) // self.config.partitioning.time_partition_days
         return partition
 
     def _make_empty_catalog(self, table_name: ApdbTables) -> pandas.DataFrame:
@@ -1645,7 +1574,7 @@ class ApdbCassandra(Apdb):
             return expressions
         else:
             pixels = self._pixelization.pixels(region)
-            if self.config.query_per_spatial_part:
+            if self.config.partitioning.query_per_spatial_part:
                 return [('"apdb_part" = ?', (pixel,)) for pixel in pixels]
             else:
                 pixels_str = ",".join([str(pix) for pix in pixels])
@@ -1685,12 +1614,12 @@ class ApdbCassandra(Apdb):
         time_part_start = self._time_partition(start_time)
         time_part_end = self._time_partition(end_time)
         time_parts = list(range(time_part_start, time_part_end + 1))
-        if self.config.time_partition_tables:
+        if self.config.partitioning.time_partition_tables:
             tables = [f"{table_name}_{part}" for part in time_parts]
         else:
             tables = [table_name]
             if query_per_time_part is None:
-                query_per_time_part = self.config.query_per_time_part
+                query_per_time_part = self.config.partitioning.query_per_time_part
             if query_per_time_part:
                 temporal_where = [('"apdb_time_part" = ?', (time_part,)) for time_part in time_parts]
             else:

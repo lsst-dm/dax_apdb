@@ -75,13 +75,9 @@ class ApdbCassandraReplica(ApdbReplica):
         # Cache for prepared statements
         self._preparer = PreparedStatementCache(self._session)
 
-        self._timer_args: list[MonAgent | logging.Logger] = [_MON]
-        if self._config.timer:
-            self._timer_args.append(_LOG)
-
     def _timer(self, name: str, *, tags: Mapping[str, str | int] | None = None) -> Timer:
         """Create `Timer` instance given its name."""
-        return Timer(name, *self._timer_args, tags=tags)
+        return Timer(name, _MON, tags=tags)
 
     @classmethod
     def apdbReplicaImplementationVersion(cls) -> VersionTuple:
@@ -107,7 +103,7 @@ class ApdbCassandraReplica(ApdbReplica):
             result = self._session.execute(
                 self._preparer.prepare(query),
                 (partition,),
-                timeout=self._config.read_timeout,
+                timeout=self._config.connection_config.read_timeout,
                 execution_profile="read_tuples",
             )
             # order by last_update_time
@@ -145,7 +141,7 @@ class ApdbCassandraReplica(ApdbReplica):
                 self._session.execute(
                     self._preparer.prepare(query),
                     [partition] + chunk_list,
-                    timeout=self._config.remove_timeout,
+                    timeout=self._config.connection_config.remove_timeout,
                 )
                 timer.add_values(row_count=len(chunk_list))
 
@@ -164,7 +160,7 @@ class ApdbCassandraReplica(ApdbReplica):
                     self._session.execute(
                         self._preparer.prepare(query),
                         chunk_list,
-                        timeout=self._config.remove_timeout,
+                        timeout=self._config.connection_config.remove_timeout,
                     )
                     timer.add_values(row_count=len(chunk_list))
 

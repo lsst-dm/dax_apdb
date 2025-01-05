@@ -24,7 +24,7 @@
 
 from __future__ import annotations
 
-__all__ = ["ApdbSqlConfig", "ApdbSql"]
+__all__ = ["ApdbSql"]
 
 import datetime
 import logging
@@ -40,7 +40,6 @@ import pandas
 import sqlalchemy
 import sqlalchemy.dialects.postgresql
 import sqlalchemy.dialects.sqlite
-from lsst.pex.config import ChoiceField, Field, ListField
 from lsst.sphgeom import HtmPixelization, LonLat, Region, UnitVector3d
 from lsst.utils.db_auth import DbAuth, DbAuthNotFoundError
 from lsst.utils.iteration import chunk_iterable
@@ -48,10 +47,11 @@ from sqlalchemy import func, sql
 from sqlalchemy.pool import NullPool
 
 from .._auth import DB_AUTH_ENVVAR, DB_AUTH_PATH
-from ..apdb import Apdb, ApdbConfig
+from ..apdb import Apdb
 from ..apdbConfigFreezer import ApdbConfigFreezer
 from ..apdbReplica import ReplicaChunk
 from ..apdbSchema import ApdbTables
+from ..config import ApdbConfig
 from ..monitor import MonAgent
 from ..schema_model import Table
 from ..timer import Timer
@@ -59,6 +59,7 @@ from ..versionTuple import IncompatibleVersionError, VersionTuple
 from .apdbMetadataSql import ApdbMetadataSql
 from .apdbSqlReplica import ApdbSqlReplica
 from .apdbSqlSchema import ApdbSqlSchema, ExtraTables
+from .config import ApdbSqlConfig
 
 if TYPE_CHECKING:
     import sqlite3
@@ -112,75 +113,6 @@ def _onSqlite3Connect(
         cursor.execute("PRAGMA foreign_keys=ON;")
 
 
-class ApdbSqlConfig(ApdbConfig):
-    """APDB configuration class for SQL implementation (ApdbSql)."""
-
-    db_url = Field[str](doc="SQLAlchemy database connection URI")
-    isolation_level = ChoiceField[str](
-        doc=(
-            "Transaction isolation level, if unset then backend-default value "
-            "is used, except for SQLite backend where we use READ_UNCOMMITTED. "
-            "Some backends may not support every allowed value."
-        ),
-        allowed={
-            "READ_COMMITTED": "Read committed",
-            "READ_UNCOMMITTED": "Read uncommitted",
-            "REPEATABLE_READ": "Repeatable read",
-            "SERIALIZABLE": "Serializable",
-        },
-        default=None,
-        optional=True,
-    )
-    connection_pool = Field[bool](
-        doc="If False then disable SQLAlchemy connection pool. Do not use connection pool when forking.",
-        default=True,
-    )
-    connection_timeout = Field[float](
-        doc=(
-            "Maximum time to wait time for database lock to be released before exiting. "
-            "Defaults to sqlalchemy defaults if not set."
-        ),
-        default=None,
-        optional=True,
-    )
-    sql_echo = Field[bool](doc="If True then pass SQLAlchemy echo option.", default=False)
-    dia_object_index = ChoiceField[str](
-        doc="Indexing mode for DiaObject table",
-        allowed={
-            "baseline": "Index defined in baseline schema",
-            "pix_id_iov": "(pixelId, objectId, iovStart) PK",
-            "last_object_table": "Separate DiaObjectLast table",
-        },
-        default="baseline",
-    )
-    htm_level = Field[int](doc="HTM indexing level", default=20)
-    htm_max_ranges = Field[int](doc="Max number of ranges in HTM envelope", default=64)
-    htm_index_column = Field[str](
-        default="pixelId", doc="Name of a HTM index column for DiaObject and DiaSource tables"
-    )
-    ra_dec_columns = ListField[str](default=["ra", "dec"], doc="Names of ra/dec columns in DiaObject table")
-    dia_object_columns = ListField[str](
-        doc="List of columns to read from DiaObject, by default read all columns", default=[]
-    )
-    prefix = Field[str](doc="Prefix to add to table names and index names", default="")
-    namespace = Field[str](
-        doc=(
-            "Namespace or schema name for all tables in APDB database. "
-            "Presently only works for PostgreSQL backend. "
-            "If schema with this name does not exist it will be created when "
-            "APDB tables are created."
-        ),
-        default=None,
-        optional=True,
-    )
-    timer = Field[bool](doc="If True then print/log timing information", default=False)
-
-    def validate(self) -> None:
-        super().validate()
-        if len(self.ra_dec_columns) != 2:
-            raise ValueError("ra_dec_columns must have exactly two column names")
-
-
 class ApdbSql(Apdb):
     """Implementation of APDB interface based on SQL database.
 
@@ -193,8 +125,6 @@ class ApdbSql(Apdb):
     config : `ApdbSqlConfig`
         Configuration object.
     """
-
-    ConfigClass = ApdbSqlConfig
 
     metadataSchemaVersionKey = "version:schema"
     """Name of the metadata key to store schema version number."""
@@ -209,10 +139,10 @@ class ApdbSql(Apdb):
     """Name of the metadata key to store code version number."""
 
     _frozen_parameters = (
-        "use_insert_id",
+        "enable_replica",
         "dia_object_index",
-        "htm_level",
-        "htm_index_column",
+        "pixelization.htm_level",
+        "pixelization.htm_index_column",
         "ra_dec_columns",
     )
     """Names of the config parameters to be frozen in metadata table."""
@@ -236,7 +166,6 @@ class ApdbSql(Apdb):
             self.config = freezer.update(config, config_json)
         else:
             self.config = config
-        self.config.validate()
 
         self._schema = ApdbSqlSchema(
             engine=self._engine,
@@ -245,14 +174,14 @@ class ApdbSql(Apdb):
             schema_name=self.config.schema_name,
             prefix=self.config.prefix,
             namespace=self.config.namespace,
-            htm_index_column=self.config.htm_index_column,
-            enable_replica=self.config.use_insert_id,
+            htm_index_column=self.config.pixelization.htm_index_column,
+            enable_replica=self.config.enable_replica,
         )
 
         if self._metadata.table_exists():
             self._versionCheck(self._metadata)
 
-        self.pixelator = HtmPixelization(self.config.htm_level)
+        self.pixelator = HtmPixelization(self.config.pixelization.htm_level)
 
         _LOG.debug("APDB Configuration:")
         _LOG.debug("    dia_object_index: %s", self.config.dia_object_index)
@@ -260,16 +189,11 @@ class ApdbSql(Apdb):
         _LOG.debug("    read_forced_sources_months: %s", self.config.read_forced_sources_months)
         _LOG.debug("    dia_object_columns: %s", self.config.dia_object_columns)
         _LOG.debug("    schema_file: %s", self.config.schema_file)
-        _LOG.debug("    extra_schema_file: %s", self.config.extra_schema_file)
         _LOG.debug("    schema prefix: %s", self.config.prefix)
-
-        self._timer_args: list[MonAgent | logging.Logger] = [_MON]
-        if self.config.timer:
-            self._timer_args.append(_LOG)
 
     def _timer(self, name: str, *, tags: Mapping[str, str | int] | None = None) -> Timer:
         """Create `Timer` instance given its name."""
-        return Timer(name, *self._timer_args, tags=tags)
+        return Timer(name, _MON, tags=tags)
 
     @classmethod
     def _makeEngine(cls, config: ApdbSqlConfig, *, create: bool) -> sqlalchemy.engine.Engine:
@@ -285,20 +209,20 @@ class ApdbSql(Apdb):
         """
         # engine is reused between multiple processes, make sure that we don't
         # share connections by disabling pool (by using NullPool class)
-        kw: MutableMapping[str, Any] = dict(echo=config.sql_echo)
+        kw: MutableMapping[str, Any] = dict(config.connection_config.extra_parameters)
         conn_args: dict[str, Any] = dict()
-        if not config.connection_pool:
+        if not config.connection_config.connection_pool:
             kw.update(poolclass=NullPool)
-        if config.isolation_level is not None:
-            kw.update(isolation_level=config.isolation_level)
-        elif config.db_url.startswith("sqlite"):  # type: ignore
+        if config.connection_config.isolation_level is not None:
+            kw.update(isolation_level=config.connection_config.isolation_level)
+        elif config.db_url.startswith("sqlite"):
             # Use READ_UNCOMMITTED as default value for sqlite.
             kw.update(isolation_level="READ_UNCOMMITTED")
-        if config.connection_timeout is not None:
+        if config.connection_config.connection_timeout is not None:
             if config.db_url.startswith("sqlite"):
-                conn_args.update(timeout=config.connection_timeout)
+                conn_args.update(timeout=config.connection_config.connection_timeout)
             elif config.db_url.startswith(("postgresql", "mysql")):
-                conn_args.update(connect_timeout=int(config.connection_timeout))
+                conn_args.update(connect_timeout=int(config.connection_config.connection_timeout))
         kw.update(connect_args=conn_args)
         engine = sqlalchemy.create_engine(cls._connection_url(config.db_url, create=create), **kw)
 
@@ -454,7 +378,7 @@ class ApdbSql(Apdb):
         schema_name: str | None = None,
         read_sources_months: int | None = None,
         read_forced_sources_months: int | None = None,
-        use_insert_id: bool = False,
+        enable_replica: bool = False,
         connection_timeout: int | None = None,
         dia_object_index: str | None = None,
         htm_level: int | None = None,
@@ -480,7 +404,7 @@ class ApdbSql(Apdb):
             Number of months of history to read from DiaSource.
         read_forced_sources_months : `int`, optional
             Number of months of history to read from DiaForcedSource.
-        use_insert_id : `bool`
+        enable_replica : `bool`
             If True, make additional tables used for replication to PPDB.
         connection_timeout : `int`, optional
             Database connection timeout in seconds.
@@ -505,7 +429,7 @@ class ApdbSql(Apdb):
         config : `ApdbSqlConfig`
             Resulting configuration object for a created APDB instance.
         """
-        config = ApdbSqlConfig(db_url=db_url, use_insert_id=use_insert_id)
+        config = ApdbSqlConfig(db_url=db_url, enable_replica=enable_replica)
         if schema_file is not None:
             config.schema_file = schema_file
         if schema_name is not None:
@@ -515,13 +439,13 @@ class ApdbSql(Apdb):
         if read_forced_sources_months is not None:
             config.read_forced_sources_months = read_forced_sources_months
         if connection_timeout is not None:
-            config.connection_timeout = connection_timeout
+            config.connection_config.connection_timeout = connection_timeout
         if dia_object_index is not None:
             config.dia_object_index = dia_object_index
         if htm_level is not None:
-            config.htm_level = htm_level
+            config.pixelization.htm_level = htm_level
         if htm_index_column is not None:
-            config.htm_index_column = htm_index_column
+            config.pixelization.htm_index_column = htm_index_column
         if ra_dec_columns is not None:
             config.ra_dec_columns = ra_dec_columns
         if prefix is not None:
@@ -586,8 +510,8 @@ class ApdbSql(Apdb):
             schema_name=config.schema_name,
             prefix=config.prefix,
             namespace=config.namespace,
-            htm_index_column=config.htm_index_column,
-            enable_replica=config.use_insert_id,
+            htm_index_column=config.pixelization.htm_index_column,
+            enable_replica=config.enable_replica,
         )
         schema.makeSchema(drop=drop)
 
@@ -601,8 +525,8 @@ class ApdbSql(Apdb):
             # Fill version numbers, overwrite if they are already there.
             apdb_meta.set(cls.metadataSchemaVersionKey, str(schema.schemaVersion()), force=True)
             apdb_meta.set(cls.metadataCodeVersionKey, str(cls.apdbImplementationVersion()), force=True)
-            if config.use_insert_id:
-                # Only store replica code version if replcia is enabled.
+            if config.enable_replica:
+                # Only store replica code version if replica is enabled.
                 apdb_meta.set(
                     cls.metadataReplicaVersionKey,
                     str(ApdbSqlReplica.apdbReplicaImplementationVersion()),
@@ -1200,13 +1124,13 @@ class ApdbSql(Apdb):
         Sequence of ranges, range is a tuple (minHtmID, maxHtmID).
         """
         _LOG.debug("region: %s", region)
-        indices = self.pixelator.envelope(region, self.config.htm_max_ranges)
+        indices = self.pixelator.envelope(region, self.config.pixelization.htm_max_ranges)
 
         return indices.ranges()
 
     def _filterRegion(self, table: sqlalchemy.schema.Table, region: Region) -> sql.ColumnElement:
         """Make SQLAlchemy expression for selecting records in a region."""
-        htm_index_column = table.columns[self.config.htm_index_column]
+        htm_index_column = table.columns[self.config.pixelization.htm_index_column]
         exprlist = []
         pixel_ranges = self._htm_indices(region)
         for low, upper in pixel_ranges:
@@ -1247,7 +1171,7 @@ class ApdbSql(Apdb):
             idx = self.pixelator.index(uv3d)
             htm_index[i] = idx
         df = df.copy()
-        df[self.config.htm_index_column] = htm_index
+        df[self.config.pixelization.htm_index_column] = htm_index
         return df
 
     def _fix_input_timestamps(self, df: pandas.DataFrame) -> pandas.DataFrame:

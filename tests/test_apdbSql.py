@@ -48,12 +48,14 @@ TEST_SCHEMA = os.path.join(os.path.abspath(os.path.dirname(__file__)), "config/s
 class ApdbSQLTest(ApdbTest):
     """A common base class for SQL APDB tests."""
 
+    dia_object_index: str
+
     def make_instance(self, **kwargs: Any) -> ApdbConfig:
         """Create database and return its config."""
         kw = {
             "schema_file": TEST_SCHEMA,
             "dia_object_index": self.dia_object_index,
-            "use_insert_id": self.enable_replica,
+            "enable_replica": self.enable_replica,
         }
         kw.update(kwargs)
         return ApdbSql.init_database(**kw)  # type: ignore[arg-type]
@@ -65,13 +67,13 @@ class ApdbSQLTest(ApdbTest):
     def pixelization(self, config: ApdbConfig) -> Pixelization:
         """Return pixelization used by implementation."""
         assert isinstance(config, ApdbSqlConfig), "Only expect ApdbSqlConfig here"
-        return Pixelization("htm", config.htm_level, config.htm_max_ranges)
+        return Pixelization("htm", config.pixelization.htm_level, config.pixelization.htm_max_ranges)
 
     def test_connection_timeout(self) -> None:
         """Test that setting connection timeout does not break things."""
         config = self.make_instance()
         assert isinstance(config, ApdbSqlConfig), "Only expect ApdbSqlConfig here"
-        config.connection_timeout = 60.0
+        config.connection_config.connection_timeout = 60.0
         Apdb.from_config(config)
 
 
@@ -200,9 +202,9 @@ class ApdbSQLiteFromUriTestCase(unittest.TestCase):
         self.db_url = f"sqlite:///{self.tempdir}/apdb.sqlite3"
         config = ApdbSql.init_database(db_url=self.db_url, schema_file=TEST_SCHEMA)
         # TODO: This will need update when we switch to pydantic configs.
-        self.config_path = os.path.join(self.tempdir, "apdb-config.py")
+        self.config_path = os.path.join(self.tempdir, "apdb-config.yaml")
         config.save(self.config_path)
-        self.bad_config_path = os.path.join(self.tempdir, "not-config.py")
+        self.bad_config_path = os.path.join(self.tempdir, "not-config.yaml")
         self.index_path = os.path.join(self.tempdir, "apdb-index.yaml")
         with open(self.index_path, "w") as index_file:
             print(f'label1: "{self.config_path}"', file=index_file)

@@ -83,7 +83,7 @@ class ApdbCassandraMixin:
         cluster = Cluster(
             contact_points=[self.cluster_host],
             execution_profiles=profiles,
-            protocol_version=config.protocol_version,
+            protocol_version=config.connection_config.protocol_version,
         )
         session = cluster.connect()
         # Deleting many tables can take long time, use long timeout.
@@ -107,7 +107,11 @@ class ApdbCassandraMixin:
     def pixelization(self, config: ApdbConfig) -> Pixelization:
         """Return pixelization used by implementation."""
         assert isinstance(config, ApdbCassandraConfig), "Only expect ApdbCassandraConfig here"
-        return Pixelization(config.part_pixelization, config.part_pix_level, config.part_pix_max_ranges)
+        return Pixelization(
+            config.partitioning.part_pixelization,
+            config.partitioning.part_pix_level,
+            config.partitioning.part_pix_max_ranges,
+        )
 
 
 class ApdbCassandraTestCase(ApdbCassandraMixin, ApdbTest, unittest.TestCase):
@@ -127,7 +131,7 @@ class ApdbCassandraTestCase(ApdbCassandraMixin, ApdbTest, unittest.TestCase):
             "keyspace": self.keyspace,
             "schema_file": TEST_SCHEMA,
             "time_partition_tables": self.time_partition_tables,
-            "use_insert_id": self.enable_replica,
+            "enable_replica": self.enable_replica,
         }
         if self.time_partition_start:
             kw["time_partition_start"] = self.time_partition_start
