@@ -753,12 +753,12 @@ class ApdbTest(TestCaseMixin, ABC):
         """Test that some config fields are correctly frozen in database."""
         config = self.make_instance()
 
-        # `use_insert_id` is the only parameter that is frozen in all
+        # `enable_replica` is the only parameter that is frozen in all
         # implementations.
-        config.use_insert_id = not self.enable_replica
+        config.enable_replica = not self.enable_replica
         apdb = Apdb.from_config(config)
         frozen_config = apdb.config  # type: ignore[attr-defined]
-        self.assertEqual(frozen_config.use_insert_id, self.enable_replica)
+        self.assertEqual(frozen_config.enable_replica, self.enable_replica)
 
 
 class ApdbSchemaUpdateTest(TestCaseMixin, ABC):
@@ -781,12 +781,12 @@ class ApdbSchemaUpdateTest(TestCaseMixin, ABC):
         tables.
         """
         # Make schema without replica tables.
-        config = self.make_instance(use_insert_id=False)
+        config = self.make_instance(enable_replica=False)
         apdb = Apdb.from_config(config)
         apdb_replica = ApdbReplica.from_config(config)
 
         # Make APDB instance configured for replication.
-        config.use_insert_id = True
+        config.enable_replica = True
         apdb = Apdb.from_config(config)
 
         # Try to insert something, should work OK.

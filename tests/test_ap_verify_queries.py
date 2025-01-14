@@ -68,12 +68,13 @@ class TestApVerifyQueries(unittest.TestCase):
     """Tests for ap_verify queries."""
 
     def setUp(self) -> None:
-        self.apdbCfg = ApdbSqlConfig()
         # Create DB in memory.
-        self.apdbCfg.db_url = "sqlite://"
-        self.apdbCfg.schema_file = TEST_SCHEMA
-        self.apdbCfg.dia_object_index = "baseline"
-        self.apdbCfg.dia_object_columns = []
+        self.apdbCfg = ApdbSqlConfig(
+            db_url="sqlite://",
+            schema_file=TEST_SCHEMA,
+            dia_object_index="baseline",
+            dia_object_columns=[],
+        )
         self.apdb = ApdbSql(config=self.apdbCfg)
         self.apdb._schema.makeSchema()
 

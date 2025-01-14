@@ -23,19 +23,18 @@ from __future__ import annotations
 
 __all__ = ["ApdbConfig", "Apdb"]
 
-import os
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import astropy.time
 import pandas
-from lsst.pex.config import Config, ConfigurableField, Field
-from lsst.resources import ResourcePath, ResourcePathExpression
+from lsst.resources import ResourcePathExpression
 from lsst.sphgeom import Region
 
 from .apdbIndex import ApdbIndex
 from .apdbSchema import ApdbTables
+from .config import ApdbConfig
 from .factory import make_apdb
 from .schema_model import Table
 
@@ -43,48 +42,8 @@ if TYPE_CHECKING:
     from .apdbMetadata import ApdbMetadata
 
 
-def _data_file_name(basename: str) -> str:
-    """Return path name of a data file in sdm_schemas package."""
-    return os.path.join("${SDM_SCHEMAS_DIR}", "yml", basename)
-
-
-class ApdbConfig(Config):
-    """Part of Apdb configuration common to all implementations."""
-
-    read_sources_months = Field[int](doc="Number of months of history to read from DiaSource", default=12)
-    read_forced_sources_months = Field[int](
-        doc="Number of months of history to read from DiaForcedSource", default=12
-    )
-    schema_file = Field[str](
-        doc="Location of (YAML) configuration file with standard schema", default=_data_file_name("apdb.yaml")
-    )
-    schema_name = Field[str](doc="Name of the schema in YAML configuration file.", default="ApdbSchema")
-    extra_schema_file = Field[str](
-        doc="Location of (YAML) configuration file with extra schema, "
-        "definitions in this file are merged with the definitions in "
-        "'schema_file', extending or replacing parts of the schema.",
-        default=None,
-        optional=True,
-        deprecated="This field is deprecated, its value is not used.",
-    )
-    use_insert_id = Field[bool](
-        doc=(
-            "If True, make and fill additional tables used for replication. "
-            "Databases created with earlier versions of APDB may not have these tables, "
-            "and corresponding methods will not work for them."
-        ),
-        default=False,
-    )
-    replica_chunk_seconds = Field[int](
-        default=600,
-        doc="Time extent for replica chunks, new chunks are created every specified number of seconds.",
-    )
-
-
 class Apdb(ABC):
     """Abstract interface for APDB."""
-
-    ConfigClass = ApdbConfig
 
     @classmethod
     def from_config(cls, config: ApdbConfig) -> Apdb:
@@ -126,13 +85,17 @@ class Apdb(ABC):
         if isinstance(uri, str) and uri.startswith("label:"):
             tag, _, label = uri.partition(":")
             index = ApdbIndex()
-            # Current format for config files is "pex_config"
-            format = "pex_config"
-            uri = index.get_apdb_uri(label, format)
-        path = ResourcePath(uri)
-        config_str = path.read().decode()
-        # Assume that this is ApdbConfig, make_apdb will raise if not.
-        config = cast(ApdbConfig, Config._fromPython(config_str))
+            # Try to find YAML format first, and pex_config if YAML is not
+            # found. During transitional period we support conversion of
+            # pex_config format to a new pydantic format.
+            try:
+                uri = index.get_apdb_uri(label, "yaml")
+            except ValueError as exc:
+                try:
+                    uri = index.get_apdb_uri(label, "pex_config")
+                except ValueError:
+                    raise exc from None
+        config = ApdbConfig.from_uri(uri)
         return make_apdb(config)
 
     @abstractmethod
@@ -385,22 +348,6 @@ class Apdb(ABC):
         This method can be very inefficient or slow in some implementations.
         """
         raise NotImplementedError()
-
-    @classmethod
-    def makeField(cls, doc: str) -> ConfigurableField:
-        """Make a `~lsst.pex.config.ConfigurableField` for Apdb.
-
-        Parameters
-        ----------
-        doc : `str`
-            Help text for the field.
-
-        Returns
-        -------
-        configurableField : `lsst.pex.config.ConfigurableField`
-            A `~lsst.pex.config.ConfigurableField` for Apdb.
-        """
-        return ConfigurableField(doc=doc, target=cls)
 
     @property
     @abstractmethod

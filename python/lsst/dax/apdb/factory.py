@@ -21,43 +21,14 @@
 
 from __future__ import annotations
 
-__all__ = ["apdb_type", "make_apdb"]
+__all__ = ["config_type_for_name", "make_apdb"]
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .apdb import Apdb, ApdbConfig
+    from .apdb import Apdb
     from .apdbReplica import ApdbReplica
-    from .cassandra import ApdbCassandra
-    from .sql import ApdbSql
-
-
-def apdb_type(config: ApdbConfig) -> type[ApdbSql | ApdbCassandra]:
-    """Return Apdb type on Apdb configuration.
-
-    Parameters
-    ----------
-    config : `ApdbConfig`
-        Configuration object, sub-class of ApdbConfig.
-
-    Returns
-    -------
-    type : `type` [`Apdb`]
-        Subclass of `Apdb` class.
-
-    Raises
-    ------
-    TypeError
-        Raised if type of ``config`` does not match any known types.
-    """
-    from .cassandra import ApdbCassandra, ApdbCassandraConfig
-    from .sql import ApdbSql, ApdbSqlConfig
-
-    if type(config) is ApdbSqlConfig:
-        return ApdbSql
-    elif type(config) is ApdbCassandraConfig:
-        return ApdbCassandra
-    raise TypeError(f"Unknown type of config object: {type(config)}")
+    from .config import ApdbConfig
 
 
 def make_apdb(config: ApdbConfig) -> Apdb:
@@ -114,3 +85,34 @@ def make_apdb_replica(config: ApdbConfig) -> ApdbReplica:
     elif type(config) is ApdbCassandraConfig:
         return ApdbCassandra(config).get_replica()
     raise TypeError(f"Unknown type of config object: {type(config)}")
+
+
+def config_type_for_name(type_name: str) -> type[ApdbConfig]:
+    """Return ApdbConfig class matching type name.
+
+    Parameters
+    ----------
+    type_name : `str`
+        Short type name of Apdb implementation, for now "sql" and "cassandra"
+        are supported.
+
+    Returns
+    -------
+    type : `type` [`ApdbConfig`]
+        Subclass of `ApdbConfig` class.
+
+    Raises
+    ------
+    TypeError
+        Raised if ``type_name`` does not match any known types.
+    """
+    if type_name == "sql":
+        from .sql import ApdbSqlConfig
+
+        return ApdbSqlConfig
+    elif type_name == "cassandra":
+        from .cassandra import ApdbCassandraConfig
+
+        return ApdbCassandraConfig
+
+    raise TypeError(f"Unknown Apdb implementation type name: {type_name}")

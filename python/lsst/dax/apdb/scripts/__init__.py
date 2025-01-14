@@ -19,6 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+from .convert_legacy_config import convert_legacy_config
 from .create_cassandra import create_cassandra
 from .create_sql import create_sql
 from .delete_cassandra import delete_cassandra

@@ -22,4 +22,5 @@
 from .apdbMetadataSql import *
 from .apdbSql import *
 from .apdbSqlReplica import *
+from .config import *
 from .modelToSql import *

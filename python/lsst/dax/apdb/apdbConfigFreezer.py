@@ -25,7 +25,10 @@ __all__ = ["ApdbConfigFreezer"]
 
 import json
 from collections.abc import Iterable
+from operator import attrgetter
 from typing import Generic, TypeVar
+
+import pydantic
 
 from .apdb import ApdbConfig
 
@@ -39,11 +42,17 @@ class ApdbConfigFreezer(Generic[_Config]):
     Parameters
     ----------
     field_names : `~collections.abc.Iterable` [`str`]
-        Names of configuration fields to be frozen.
+        Names of configuration fields to be frozen, they can be hierarchical
+        (dot-separated).
     """
 
     def __init__(self, field_names: Iterable[str]):
         self._field_names = list(field_names)
+        self._getters = {name.split(".")[-1]: attrgetter(name) for name in self._field_names}
+        self._attr_parents = {}
+        for name in self._field_names:
+            path = name.split(".")
+            self._attr_parents[path[-1]] = path[:-1]
 
     def to_json(self, config: ApdbConfig) -> str:
         """Convert part of the configuration object to JSON string.
@@ -56,11 +65,12 @@ class ApdbConfigFreezer(Generic[_Config]):
         Returns
         -------
         json_str : `str`
-            JSON representation of the frozen part of the config.
+            JSON representation of the frozen part of the config. For
+            hierarchical dot-separated names only that last part of the name is
+            used in the returned JSON mapping.
         """
-        config_dict = config.toDict()
-        json_dict = {name: config_dict[name] for name in self._field_names}
-        return json.dumps(json_dict)
+        data = {name: getter(config) for name, getter in self._getters.items()}
+        return json.dumps(data)
 
     def update(self, config: _Config, json_str: str) -> _Config:
         """Update configuration field values from a JSON string.
@@ -89,10 +99,27 @@ class ApdbConfigFreezer(Generic[_Config]):
         if not isinstance(data, dict):
             raise TypeError(f"JSON string must be convertible to object: {json_str!r}")
 
-        new_config = type(config)(**config.toDict())
-        for key, value in data.items():
-            if key not in self._field_names:
-                raise ValueError(f"JSON object contains unknown key: {key}")
-            setattr(new_config, key, value)
+        # Older config used different parameter name for it.
+        if "use_insert_id" in data:
+            data["enable_replica"] = data.pop("use_insert_id")
+        if "use_insert_id_skips_diaobjects" in data:
+            data["replica_skips_diaobjects"] = data.pop("use_insert_id_skips_diaobjects")
 
-        return new_config
+        # We want to update some fields and re-validate the model, the easiest
+        # way to do it is to convert model to a dict first, update the dict and
+        # convert back to model.
+        model_data = config.model_dump()
+        for attr, value in data.items():
+            parent_path = self._attr_parents.get(attr)
+            if parent_path is None:
+                raise ValueError(f"Frozen configuration contains unexpected attribute {attr}={value}")
+            obj = model_data
+            for parent_attr in parent_path:
+                obj = obj[parent_attr]
+            obj[attr] = value
+
+        try:
+            new_config = type(config).model_validate(model_data, strict=True)
+            return new_config
+        except pydantic.ValidationError as exc:
+            raise ValueError("Validation error for frozen config") from exc

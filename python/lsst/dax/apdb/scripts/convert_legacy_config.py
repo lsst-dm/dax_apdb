@@ -21,33 +21,26 @@
 
 from __future__ import annotations
 
-__all__ = ["create_sql"]
+__all__ = ["convert_legacy_config"]
 
-import warnings
-from typing import Any
+from lsst.resources import ResourcePath
 
-from ..sql import ApdbSql
+from ..legacy_config import ApdbConfig
 
 
-def create_sql(output_config: str, ra_dec_columns: str | None, **kwargs: Any) -> None:
-    """Create new APDB instance in SQL database.
+def convert_legacy_config(legacy_config: str, new_config: str) -> None:
+    """List contents of APDB index file.
 
     Parameters
     ----------
-    output_config : `str`
-        Name of the file to write APDB configuration.
-    ra_dec_columns : `str` or `None`
-        Comma-separated list of names for ra/dec columns in DiaObject table.
-    **kwargs
-        Keyword arguments passed to `ApdbSql.init_database` method.
+    lecagy_config : `str`
+        Path or URL for the existing APDB configuration in pex_config format.
+    new_config : `str`
+        Path or URL for the output configuration in YAML format.
     """
-    ra_dec_list: list[str] | None = None
-    if ra_dec_columns:
-        ra_dec_list = ra_dec_columns.split(",")
-    config = ApdbSql.init_database(ra_dec_columns=ra_dec_list, **kwargs)
-    config.save(output_config)
-    if output_config.endswith(".py"):
-        warnings.warn(
-            "APDB configuration is now saved in YAML format, "
-            "output file should use .yaml extension instead of .py."
-        )
+    path = ResourcePath(legacy_config)
+    config_bytes = path.read()
+
+    pex_config = ApdbConfig.legacy_load(config_bytes)
+    pydantic_config = pex_config.to_model()
+    pydantic_config.save(new_config)
