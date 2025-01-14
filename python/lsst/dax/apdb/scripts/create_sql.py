@@ -23,6 +23,7 @@ from __future__ import annotations
 
 __all__ = ["create_sql"]
 
+import warnings
 from typing import Any
 
 from ..sql import ApdbSql
@@ -45,3 +46,8 @@ def create_sql(output_config: str, ra_dec_columns: str | None, **kwargs: Any) ->
         ra_dec_list = ra_dec_columns.split(",")
     config = ApdbSql.init_database(ra_dec_columns=ra_dec_list, **kwargs)
     config.save(output_config)
+    if output_config.endswith(".py"):
+        warnings.warn(
+            "APDB configuration is now saved in YAML format, "
+            "output file should use .yaml extension instead of .py."
+        )
